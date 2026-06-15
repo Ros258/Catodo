@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/task.dart';
+import '../models/chat_record.dart';
 
 class DatabaseService {
   static Isar? _instance;
@@ -24,7 +25,7 @@ class DatabaseService {
     try {
       _instance =
           await Isar.open(
-            [TaskSchema],
+            [TaskSchema, ChatRecordSchema],
             directory: dir.path,
             inspector: kDebugMode,
           ).timeout(

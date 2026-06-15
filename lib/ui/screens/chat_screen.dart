@@ -6,7 +6,9 @@ import '../../services/ai_agent.dart';
 import '../../providers/task_providers.dart';
 import '../../providers/isar_provider.dart';
 import '../../data/task_dao.dart';
+import '../../data/chat_dao.dart';
 import '../../models/task.dart';
+import '../../models/chat_record.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -26,19 +28,56 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void initState() {
     super.initState();
     _initAIService();
-    _messages.add(
-      ChatMessage(
-        isUser: false,
-        text:
-            '你好！我是 AI 助手，可以直接帮你管理任务：\n'
-            '1. 创建任务 - "帮我创建一个高优先级任务：完成报告"\n'
-            '2. 分解任务 - "分解任务「学习 Flutter」"\n'
-            '3. 调整优先级 - "把任务「买牛奶」设为低优先级"\n'
-            '4. 加标签/分组 - "给任务加标签「紧急」"\n'
-            '5. 完成/删除 - "完成任务「买牛奶」"\n'
-            '6. 自由对话 - 直接输入你的问题',
-      ),
-    );
+    _loadHistory();
+  }
+
+  Future<void> _loadHistory() async {
+    final isarAsync = ref.read(isarProvider);
+    final isar = isarAsync.valueOrNull;
+    if (isar == null) {
+      // Isar 未就绪，显示欢迎消息
+      _messages.add(
+        ChatMessage(
+          isUser: false,
+          text:
+              '你好！我是 AI 助手，可以直接帮你管理任务：\n'
+              '1. 创建任务 - "帮我创建一个高优先级任务：完成报告"\n'
+              '2. 分解任务 - "分解任务「学习 Flutter」"\n'
+              '3. 调整优先级 - "把任务「买牛奶」设为低优先级"\n'
+              '4. 加标签/分组 - "给任务加标签「紧急」"\n'
+              '5. 完成/删除 - "完成任务「买牛奶」"\n'
+              '6. 自由对话 - 直接输入你的问题',
+        ),
+      );
+      return;
+    }
+
+    final dao = ChatDao(isar);
+    final records = await dao.getRecent(limit: 100);
+
+    if (records.isEmpty) {
+      // 无历史记录，显示欢迎消息
+      _messages.add(
+        ChatMessage(
+          isUser: false,
+          text:
+              '你好！我是 AI 助手，可以直接帮你管理任务：\n'
+              '1. 创建任务 - "帮我创建一个高优先级任务：完成报告"\n'
+              '2. 分解任务 - "分解任务「学习 Flutter」"\n'
+              '3. 调整优先级 - "把任务「买牛奶」设为低优先级"\n'
+              '4. 加标签/分组 - "给任务加标签「紧急」"\n'
+              '5. 完成/删除 - "完成任务「买牛奶」"\n'
+              '6. 自由对话 - 直接输入你的问题',
+        ),
+      );
+    } else {
+      // 恢复历史消息
+      for (final record in records) {
+        _messages.add(ChatMessage(isUser: record.isUser, text: record.text));
+      }
+    }
+
+    setState(() {});
   }
 
   Future<void> _initAIService() async {
@@ -76,12 +115,57 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
+  /// 持久化一条消息到 Isar（不含确认卡片）
+  Future<void> _persistMessage(ChatMessage message) async {
+    if (message.pendingActions != null) return; // 确认卡片不持久化
+    final isarAsync = ref.read(isarProvider);
+    final isar = isarAsync.valueOrNull;
+    if (isar == null) return;
+
+    final dao = ChatDao(isar);
+    await dao.insert(ChatRecord(isUser: message.isUser, text: message.text));
+  }
+
+  /// 清空当前会话的历史记录
+  Future<void> _clearHistory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('清空对话历史'),
+        content: const Text('确定要清空所有对话记录吗？此操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('清空', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final isarAsync = ref.read(isarProvider);
+    final isar = isarAsync.valueOrNull;
+    if (isar != null) {
+      final dao = ChatDao(isar);
+      await dao.clearAll();
+    }
+
+    setState(() => _messages.clear());
+    _scrollToBottom();
+  }
+
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
     _messageController.clear();
     setState(() => _messages.add(ChatMessage(isUser: true, text: text)));
+    _persistMessage(ChatMessage(isUser: true, text: text));
     _scrollToBottom();
 
     if (_aiService == null) {
@@ -90,6 +174,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ChatMessage(isUser: false, text: '请先在设置中配置 AI 助手的 API 参数。'),
         ),
       );
+      _persistMessage(ChatMessage(isUser: false, text: '请先在设置中配置 AI 助手的 API 参数。'));
       _scrollToBottom();
       return;
     }
@@ -150,6 +235,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _messages.add(ChatMessage(isUser: false, text: replyBuffer.toString()));
       });
 
+      _persistMessage(ChatMessage(isUser: false, text: replyBuffer.toString()));
+
       // 需要确认的操作显示确认卡片
       if (confirmActions.isNotEmpty) {
         setState(() {
@@ -168,6 +255,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       setState(
         () => _messages.add(ChatMessage(isUser: false, text: '抱歉，发生错误：$e')),
       );
+      _persistMessage(ChatMessage(isUser: false, text: '抱歉，发生错误：$e'));
       _scrollToBottom();
     } finally {
       setState(() => _isLoading = false);
@@ -182,6 +270,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       setState(
         () => _messages.add(ChatMessage(isUser: false, text: '数据库未就绪，请稍后再试。')),
       );
+      _persistMessage(ChatMessage(isUser: false, text: '数据库未就绪，请稍后再试。'));
       _scrollToBottom();
       return;
     }
@@ -204,6 +293,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     setState(() {
       _messages.add(ChatMessage(isUser: false, text: buffer.toString()));
     });
+    _persistMessage(ChatMessage(isUser: false, text: buffer.toString()));
     _scrollToBottom();
   }
 
@@ -211,6 +301,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     setState(() {
       _messages.add(ChatMessage(isUser: false, text: '已取消操作。'));
     });
+    _persistMessage(ChatMessage(isUser: false, text: '已取消操作。'));
     _scrollToBottom();
   }
 
@@ -244,10 +335,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           color: Colors.black87,
                         ),
                       ),
-                      TextButton.icon(
-                        onPressed: _showQuickActions,
-                        icon: const Icon(Icons.auto_awesome, size: 18),
-                        label: const Text('快捷操作'),
+                      Row(
+                        children: [
+                          TextButton.icon(
+                            onPressed: _clearHistory,
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            label: const Text('清空'),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.grey,
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: _showQuickActions,
+                            icon: const Icon(Icons.auto_awesome, size: 18),
+                            label: const Text('快捷操作'),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -565,6 +668,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         () =>
             _messages.add(ChatMessage(isUser: false, text: '当前没有可用任务，请先创建任务。')),
       );
+      _persistMessage(ChatMessage(isUser: false, text: '当前没有可用任务，请先创建任务。'));
       _scrollToBottom();
       return;
     }

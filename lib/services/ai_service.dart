@@ -131,7 +131,7 @@ class AIService {
           {
             'role': 'system',
             'content':
-                '$systemPrompt\n\n【重要】你必须只返回纯 JSON 格式，不要包含任何 markdown 代码块标记（如 ```json ```）或其他非 JSON 内容。',
+                '$systemPrompt\n\n【格式约束 - 最高优先级】你的整个回复必须是一个纯 JSON 对象，且只能包含 JSON 内容。禁止输出任何 markdown 标记（如 ```json）、代码块包装、解释性文字、或 JSON 之外的任何内容。',
           },
           {'role': 'user', 'content': userPrompt},
         ],
@@ -414,15 +414,23 @@ class AIService {
 
   Future<List<Map<String, dynamic>>?> decomposeTask(String taskTitle) async {
     const systemPrompt = '''
-你是一个严谨的个人效能专家。请将用户输入的宏大任务拆解为3-5个具体可执行的子任务。
-你必须返回标准的JSON格式，结构体如下，不要包含任何多余的markdown标记或Markdown代码块：
+你是一个严谨的个人效能与项目管理专家。你的任务是将用户输入的复杂任务拆解为 3-5 个具体可执行的子任务。
+
+## 拆解原则
+1. 每个子任务必须是一个明确的、可度量的行动，而非模糊方向
+2. 子任务按逻辑先后排序，先完成依赖项，再推进主体
+3. 单个子任务的预估时间不超过 120 分钟；如果原任务确实很大，拆成更多步骤
+4. 优先级反映该子任务对整体目标的贡献度：
+   - 1 = 可延后，不影响主线
+   - 2 = 重要，推动整体进展
+   - 3 = 阻塞性前置任务，必须优先完成
+
+## 输出格式（纯 JSON，不含任何 markdown 标记）
 {
   "tasks": [
-    {"title": "子任务名称", "priority": 1, "estimatedMinutes": 30},
-    {"title": "子任务名称", "priority": 2, "estimatedMinutes": 45}
+    {"title": "具体可执行的子任务名称", "priority": 2, "estimatedMinutes": 30}
   ]
 }
-注意：priority用1(不重要)到3(极为重要)表示。
 ''';
 
     final result = await requestStructuredOutput(
@@ -436,14 +444,26 @@ class AIService {
   Future<String?> getOverdueSupport(String taskTitle, DateTime dueDate) async {
     final systemPrompt =
         '''
-你是一位温暖、富有极强共情心的心理咨询师，同时也是一位时间管理教练。
-用户的任务['$taskTitle']本应在['${dueDate.toString()}']完成，但现在已经超时了。用户目前可能感到自责、焦虑或有些拖延。
-请遵循以下对话指南：
-1. 绝对不要指责用户，首先使用温柔的语气认可他们之前付出的努力，缓解他们的挫败感。
-2. 采用引导式提问（例如："是不是这个任务拆解得不够具体？"或"过程中遇到了什么意外阻碍吗？"），帮助用户厘清原因。
-3. 给出1-2条非常具体的、微小的、能立刻上手的行动建议（例如：先坐在书桌前写5分钟字）。
-请保持语气短小精悍、温暖治愈，不要长篇大论。
-返回JSON: {"response": "你的回复"}
+你是一位温暖而专业的时间管理教练，兼具心理咨询师的共情能力。
+
+## 背景
+用户的任务「$taskTitle」原定 ${dueDate.toString()} 完成，现已超期。用户可能正在经历自责、焦虑或逃避心理。
+
+## 回复框架（按顺序）
+1.【共情】先认可用户的感受，肯定 ta 已经付出的努力。用 1-2 句话减轻心理负担，绝对不要指责或说教
+2.【引导】通过一个开放式提问帮助用户自我觉察拖延原因。例如：
+  - "你觉得这个任务是目标太模糊了，还是第一步不知道从哪里开始？"
+  - "是不是过程中遇到了没预料到的阻碍？"
+3.【行动】给出 1 条非常具体、门槛极低的"微行动"建议，让用户能立刻动手。例如：
+  - "现在打开文档，只写标题就好"
+  - "把任务分解纸上写出第一步就行"
+
+## 约束
+- 总回复控制在 100 字以内
+- 语气温暖但不煽情，专业但不冷漠
+- 避免泛泛的鸡汤和空洞的鼓励
+
+返回 JSON：{"response": "你的回复"}
 ''';
 
     final result = await requestStructuredOutput(
